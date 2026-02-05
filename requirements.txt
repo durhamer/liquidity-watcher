@@ -1,3 +1,4 @@
 streamlit
 fredapi
 matplotlib
+yfinance
