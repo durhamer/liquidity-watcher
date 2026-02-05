@@ -18,9 +18,15 @@ with st.sidebar:
     
     st.subheader("📈 股市疊圖對比")
     compare_index = st.selectbox(
-        "選擇要對比的指數",
-        ["None (不對比)", "^GSPC (S&P 500)", "^NDX (Nasdaq 100)", "^SOX (Phlx Semi)"]
-    )
+    "選擇要對比的指數",
+    [
+        "None (不對比)", 
+        "^GSPC (S&P 500 - 被七巨頭扭曲)", 
+        "RSP (S&P 500 等權重 - 真實經濟)",   # <--- 加入這個
+        "^NDX (Nasdaq 100)", 
+        "^SOX (Phlx Semi)"
+    ]
+)
     
     days_back = st.slider("回溯天數", min_value=365, max_value=3650, value=1095, step=30)
     st.info("建議回溯天數設為 1095 (3年) 以上，較能看清週期。")
