@@ -3,165 +3,200 @@ import pandas as pd
 from fredapi import Fred
 import matplotlib.pyplot as plt
 import yfinance as yf
+import numpy as np
 from datetime import datetime, timedelta
 
-# --- 網頁設定 ---
-st.set_page_config(page_title="Alpha 宏觀戰情室", layout="centered")
-st.title("🦅 Alpha 宏觀戰情室")
+# --- 1. 頁面設定 ---
+st.set_page_config(page_title="Alpha 宏觀戰情室 Pro", layout="centered")
+st.title("🦅 Alpha 宏觀戰情室 Pro")
+st.markdown("監控全球資金水位與市場估值的核心儀表板")
 
-# --- 側邊欄：設定 ---
+# --- 2. 側邊欄：設定 ---
 with st.sidebar:
-    st.header("⚙️ 設定面板")
+    st.header("⚙️ 參數設定")
     api_key_input = st.text_input("輸入 FRED API Key", type="password")
     
     st.divider()
     
-    st.subheader("📈 股市疊圖對比")
+    # 優化 1: 加入 RSP (等權重) 讓你能一鍵切換
+    st.subheader("📈 股市對比")
     compare_index = st.selectbox(
-    "選擇要對比的指數",
-    [
-        "None (不對比)", 
-        "^GSPC (S&P 500 - 被七巨頭扭曲)", 
-        "RSP (S&P 500 等權重 - 真實經濟)",   # <--- 加入這個
-        "^NDX (Nasdaq 100)", 
-        "^SOX (Phlx Semi)"
-    ]
-)
+        "選擇指數",
+        ["^GSPC (S&P 500 - 七巨頭)", "RSP (S&P 500 等權重 - 真實經濟)", "^NDX (Nasdaq 100)", "^SOX (費半)", "BTC-USD (比特幣)"]
+    )
     
-    days_back = st.slider("回溯天數", min_value=365, max_value=3650, value=1095, step=30)
-    st.info("建議回溯天數設為 1095 (3年) 以上，較能看清週期。")
+    # 優化 2: 增加「回歸分析」的時間區間
+    st.subheader("🧮 模型訓練區間")
+    st.caption("選擇用哪段時間的數據來定義「正常關係」")
+    reg_start_year = st.slider("回歸起始年", 2018, 2024, 2020)
+    
+    days_back = st.slider("顯示回溯天數", min_value=365, max_value=3650, value=1095, step=30)
+    
+    st.markdown("---")
+    st.markdown("[申請 FRED API Key](https://fred.stlouisfed.org/docs/api/api_key.html)")
 
-# --- 數據抓取函數 ---
-@st.cache_data(ttl=3600) # 快取 1 小時，避免重複抓取
-def get_fred_data(api_key, days):
+# --- 3. 數據核心 ---
+@st.cache_data(ttl=3600)
+def get_macro_data(api_key, days):
     fred = Fred(api_key=api_key)
     start_date = datetime.now() - timedelta(days=days)
     
     try:
-        # 1. 信用利差數據
-        ccc = fred.get_series('BAMLH0A3HYC', observation_start=start_date)
-        bb = fred.get_series('BAMLH0A1HYBB', observation_start=start_date)
-        
-        # 2. 淨流動性數據 (Net Liquidity)
-        # WALCL: Fed Total Assets (週資料)
-        # WTREGEN: Treasury General Account (TGA) (週資料)
-        # RRPONTSYD: Overnight Reverse Repo (RRP) (日資料)
+        # 1. 淨流動性數據 (Net Liquidity)
+        # WALCL: Fed Total Assets
+        # WTREGEN: TGA (財政部帳戶)
+        # RRPONTSYD: 逆回購 (RRP)
         fed_assets = fred.get_series('WALCL', observation_start=start_date)
         tga = fred.get_series('WTREGEN', observation_start=start_date)
         rrp = fred.get_series('RRPONTSYD', observation_start=start_date)
         
-        # 3. 殖利率曲線 (Yield Curve)
-        # T10Y3M: 10-Year Minus 3-Month Treasury Yield Spread
+        # 2. 殖利率曲線 & 信用利差
         yc_10y3m = fred.get_series('T10Y3M', observation_start=start_date)
+        ccc = fred.get_series('BAMLH0A3HYC', observation_start=start_date)
+        bb = fred.get_series('BAMLH0A1HYBB', observation_start=start_date)
 
-        # 整理數據
+        # 合併與清洗
         df = pd.DataFrame({
-            'CCC': ccc, 'BB': bb, 
             'Fed_Assets': fed_assets, 'TGA': tga, 'RRP': rrp,
-            'Yield_Curve': yc_10y3m
+            'Yield_Curve': yc_10y3m, 'CCC': ccc, 'BB': bb
         })
-        
-        # 處理頻率不一致問題 (RRP是日更，其他是週更，用 ffill 填補)
         df = df.fillna(method='ffill').dropna()
         
-        # 計算衍生指標
-        df['Stress_Signal'] = df['CCC'] - df['BB']
-        # 淨流動性 = Fed資產 - TGA - RRP (單位轉換為兆美元)
+        # 計算核心指標
+        # 單位換算成「兆 (Trillions)」
         df['Net_Liquidity'] = (df['Fed_Assets'] - df['TGA'] - df['RRP']) / 1000000 
+        df['Credit_Stress'] = df['CCC'] - df['BB']
         
         return df
     except Exception as e:
         return None
 
 def get_stock_data(ticker, start_date):
-    if ticker.startswith("None"):
-        return None
+    if not ticker: return None
     symbol = ticker.split(" ")[0]
     try:
-        stock = yf.download(symbol, start=start_date, progress=False)
+        stock = yf.download(symbol, start=start_date, progress=False)['Close']
         stock.index = stock.index.tz_localize(None)
-        return stock['Close']
+        return stock
     except:
         return None
 
-# --- 主程式 ---
+# --- 4. 主邏輯 ---
 if api_key_input:
-    with st.spinner('正在從聯準會與華爾街抓取最新數據...'):
-        df = get_fred_data(api_key_input, days_back)
+    with st.spinner('正在從聯準會與華爾街下載數據...'):
+        df = get_macro_data(api_key_input, days_back + 365) # 多抓一點給回歸用
         
     if df is not None:
-        stock_data = get_stock_data(compare_index, df.index[0].strftime('%Y-%m-%d'))
+        stock_series = get_stock_data(compare_index, df.index[0].strftime('%Y-%m-%d'))
         
-        # 使用 Tabs 分頁
-        tab1, tab2, tab3 = st.tabs(["💧 美元淨流動性 (最敏感)", "📉 殖利率曲線 (衰退指標)", "🔥 信用利差 (舊版)"])
+        # 合併 股市 與 宏觀數據 (取交集)
+        merged_df = pd.concat([df, stock_series], axis=1).dropna()
+        merged_df.columns = list(df.columns) + ['Stock_Price']
 
-        # --- Tab 1: 淨流動性 (Net Liquidity) ---
+        # --- Tab 分頁 ---
+        tab1, tab2, tab3 = st.tabs(["💧 流動性估值模型 (Fair Value)", "📉 殖利率曲線 (衰退)", "🔥 信用利差 (違約)"])
+
+        # ==========================================
+        # Tab 1: 流動性估值模型 (物理學家的最愛)
+        # ==========================================
         with tab1:
-            st.subheader("美元淨流動性 vs 股市")
-            st.markdown("""
-            **公式：** `Fed資產負債表 - TGA帳戶 - 逆回購(RRP)`
-            \n**解讀：** 這是股市的「燃料」。如果藍線(錢)往下掉，橘線(股市)通常會在 2-4 週後跟著掉。
-            """)
+            st.subheader(f"美元淨流動性 vs {compare_index.split(' ')[0]}")
             
-            latest_liq = df['Net_Liquidity'].iloc[-1]
-            prev_liq = df['Net_Liquidity'].iloc[-30]
-            delta_liq = latest_liq - prev_liq
+            # 1. 訓練回歸模型 (找出物理定律)
+            # 篩選出訓練區間的數據
+            train_start = f"{reg_start_year}-01-01"
+            train_data = merged_df[merged_df.index >= train_start]
             
-            st.metric("當前市場淨流動性 (兆美元)", f"${latest_liq:.2f} T", f"{delta_liq:+.2f} T")
+            if len(train_data) > 30:
+                # y = mx + c (股價 = 斜率 * 流動性 + 常數)
+                x = train_data['Net_Liquidity']
+                y = train_data['Stock_Price']
+                
+                # numpy polyfit 算出斜率與截距
+                slope, intercept = np.polyfit(x, y, 1)
+                
+                # 計算「理論價格」 (Fair Value)
+                merged_df['Fair_Value'] = merged_df['Net_Liquidity'] * slope + intercept
+                merged_df['Deviation'] = merged_df['Stock_Price'] - merged_df['Fair_Value']
+                merged_df['Deviation_Pct'] = (merged_df['Deviation'] / merged_df['Fair_Value']) * 100
+                
+                # 顯示最新狀態
+                latest = merged_df.iloc[-1]
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("當前淨流動性", f"${latest['Net_Liquidity']:.2f} T")
+                with col2:
+                    st.metric("理論公允股價", f"{latest['Fair_Value']:.0f}", help="根據流動性推算的合理價格")
+                with col3:
+                    is_bubble = latest['Deviation_Pct'] > 0
+                    st.metric(
+                        "⚠️ 泡沫溢價" if is_bubble else "✅ 低估折價", 
+                        f"{latest['Deviation_Pct']:.1f}%", 
+                        f"{latest['Deviation']:.0f} 點",
+                        delta_color="inverse"
+                    )
 
-            fig, ax1 = plt.subplots(figsize=(10, 5))
-            color = 'tab:blue'
-            ax1.set_ylabel('Net Liquidity (Trillions $)', color=color)
-            ax1.plot(df.index, df['Net_Liquidity'], color=color, linewidth=2, label='Net Liquidity')
-            ax1.tick_params(axis='y', labelcolor=color)
-            ax1.grid(True, alpha=0.3)
-            
-            if stock_data is not None:
-                ax2 = ax1.twinx()
-                color_stock = 'tab:orange'
-                ax2.set_ylabel(f'{compare_index.split(" ")[1]} Price', color=color_stock)
-                ax2.plot(stock_data.index, stock_data, color=color_stock, linestyle='--', label='Stock Index')
-                ax2.tick_params(axis='y', labelcolor=color_stock)
-            
-            st.pyplot(fig)
+                # 繪圖 1: 走勢對比
+                fig, ax1 = plt.subplots(figsize=(10, 6))
+                
+                # 畫公允價值區間 (Fair Value Band)
+                ax1.plot(merged_df.index, merged_df['Stock_Price'], color='orange', label='Actual Price', linewidth=2)
+                ax1.plot(merged_df.index, merged_df['Fair_Value'], color='blue', linestyle='--', label='Fair Value (Liquidity Model)', alpha=0.7)
+                
+                # 填色：溢價(紅) vs 折價(綠)
+                ax1.fill_between(merged_df.index, merged_df['Stock_Price'], merged_df['Fair_Value'], 
+                                 where=(merged_df['Stock_Price'] > merged_df['Fair_Value']), 
+                                 color='red', alpha=0.3, label='Overvalued (Bubble)')
+                
+                ax1.fill_between(merged_df.index, merged_df['Stock_Price'], merged_df['Fair_Value'], 
+                                 where=(merged_df['Stock_Price'] <= merged_df['Fair_Value']), 
+                                 color='green', alpha=0.3, label='Undervalued')
 
-        # --- Tab 2: 殖利率曲線 (Yield Curve) ---
+                ax1.set_ylabel("Price")
+                ax1.set_title("Market Price vs Liquidity-Implied Fair Value")
+                ax1.legend()
+                ax1.grid(True, alpha=0.3)
+                st.pyplot(fig)
+                
+                # 繪圖 2: 散佈圖 (Scatter Plot) - 驗證相關性
+                with st.expander("查看相關性物理模型 (Scatter Plot)"):
+                    fig2, ax2 = plt.subplots()
+                    ax2.scatter(merged_df['Net_Liquidity'], merged_df['Stock_Price'], alpha=0.5, c=merged_df.index.year, cmap='viridis')
+                    # 畫出回歸線
+                    x_seq = np.linspace(merged_df['Net_Liquidity'].min(), merged_df['Net_Liquidity'].max(), 100)
+                    y_seq = slope * x_seq + intercept
+                    ax2.plot(x_seq, y_seq, 'r--', label='Regression Line')
+                    
+                    ax2.set_xlabel("Net Liquidity (Trillions)")
+                    ax2.set_ylabel("Stock Index Price")
+                    ax2.legend()
+                    st.pyplot(fig2)
+                    st.caption("顏色代表年份。如果點都在紅線上方，代表脫離基本面。")
+
+            else:
+                st.warning("數據不足，無法計算模型。請調整回歸起始年。")
+
+        # ==========================================
+        # Tab 2: 殖利率曲線
+        # ==========================================
         with tab2:
             st.subheader("10年期 - 3個月公債利差")
-            st.markdown("""
-            **解讀：** * **倒掛 (0以下)**：預警未來一年內可能衰退。
-            * **解除倒掛 (回到0以上)**：**最危險的時刻！** 通常崩盤都發生在「曲線重新變陡、回到正數」的那一瞬間。
-            """)
-            
             latest_yc = df['Yield_Curve'].iloc[-1]
-            st.metric("10Y-3M 利差", f"{latest_yc:.2f}%", delta_color="normal")
+            st.metric("10Y-3M 利差", f"{latest_yc:.2f}%")
             
-            if latest_yc > -0.2 and latest_yc < 0.2:
-                st.warning("⚠️ 警告：殖利率曲線即將「解除倒掛」，這是崩盤前的經典訊號！")
+            fig3, ax3 = plt.subplots(figsize=(10, 5))
+            ax3.axhline(y=0, color='black', linewidth=1)
+            ax3.plot(df.index, df['Yield_Curve'], color='black', linewidth=1)
+            ax3.fill_between(df.index, df['Yield_Curve'], 0, where=(df['Yield_Curve'] < 0), color='red', alpha=0.3)
+            ax3.fill_between(df.index, df['Yield_Curve'], 0, where=(df['Yield_Curve'] > 0), color='green', alpha=0.3)
+            st.pyplot(fig3)
 
-            fig2, ax = plt.subplots(figsize=(10, 5))
-            # 繪製 0 軸線 (危險分界線)
-            ax.axhline(y=0, color='black', linestyle='-', linewidth=1)
-            
-            # 根據正負值填色
-            ax.plot(df.index, df['Yield_Curve'], color='black', linewidth=1)
-            ax.fill_between(df.index, df['Yield_Curve'], 0, where=(df['Yield_Curve'] < 0), color='red', alpha=0.3, label='Inverted (Recession Warning)')
-            ax.fill_between(df.index, df['Yield_Curve'], 0, where=(df['Yield_Curve'] > 0), color='green', alpha=0.3, label='Normal')
-            
-            ax.set_ylabel('Spread (%)')
-            ax.grid(True, alpha=0.3)
-            
-            if stock_data is not None:
-                ax3 = ax.twinx()
-                ax3.plot(stock_data.index, stock_data, color='tab:orange', linestyle='--', alpha=0.6)
-            
-            st.pyplot(fig2)
-
-        # --- Tab 3: 信用利差 (Original) ---
+        # ==========================================
+        # Tab 3: 信用利差
+        # ==========================================
         with tab3:
             st.subheader("垃圾債壓力指標 (CCC - BB)")
-            st.line_chart(df['Stress_Signal'])
-            st.write("這是你原本使用的指標，適合用來確認「現在是不是已經失控」。")
+            st.line_chart(df['Credit_Stress'])
 
 else:
-    st.info("👈 請在左側輸入 FRED API Key 以解鎖戰情室")
+    st.info("👈 請在左側輸入 FRED API Key 以啟動戰情室")
