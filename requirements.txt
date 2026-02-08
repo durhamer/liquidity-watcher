@@ -2,3 +2,4 @@ streamlit
 fredapi
 matplotlib
 yfinance
+plotly
