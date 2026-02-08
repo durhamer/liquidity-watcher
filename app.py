@@ -108,33 +108,62 @@ if api_key_input:
             train_data = merged_df[merged_df.index >= train_start]
             
             if len(train_data) > 30:
-                # y = mx + c (股價 = 斜率 * 流動性 + 常數)
+                # 準備 X (流動性) 和 Y (股價)
                 x = train_data['Net_Liquidity']
                 y = train_data['Stock_Price']
                 
-                # numpy polyfit 算出斜率與截距
+                # --- 1. 計算線性回歸 (Math) ---
                 slope, intercept = np.polyfit(x, y, 1)
                 
-                # 計算「理論價格」 (Fair Value)
+                # --- 2. 新增：計算 R-squared (測謊儀) ---
+                correlation_matrix = np.corrcoef(x, y)
+                correlation_xy = correlation_matrix[0, 1]
+                r_squared = correlation_xy ** 2
+                
+                # 計算理論價格
                 merged_df['Fair_Value'] = merged_df['Net_Liquidity'] * slope + intercept
                 merged_df['Deviation'] = merged_df['Stock_Price'] - merged_df['Fair_Value']
                 merged_df['Deviation_Pct'] = (merged_df['Deviation'] / merged_df['Fair_Value']) * 100
                 
-                # 顯示最新狀態
                 latest = merged_df.iloc[-1]
-                col1, col2, col3 = st.columns(3)
-                with col1:
+
+                # --- 3. 顯示診斷數據 (UI Update) ---
+                st.markdown("#### 🔬 模型診斷報告")
+                d_col1, d_col2, d_col3, d_col4 = st.columns(4)
+                
+                with d_col1:
                     st.metric("當前淨流動性", f"${latest['Net_Liquidity']:.2f} T")
-                with col2:
-                    st.metric("理論公允股價", f"{latest['Fair_Value']:.0f}", help="根據流動性推算的合理價格")
-                with col3:
+                
+                with d_col2:
+                    st.metric("理論公允股價", f"{latest['Fair_Value']:.0f}")
+                
+                with d_col3:
+                    # 顏色邏輯：泡沫(紅) / 折價(綠)
                     is_bubble = latest['Deviation_Pct'] > 0
                     st.metric(
-                        "⚠️ 泡沫溢價" if is_bubble else "✅ 低估折價", 
+                        "⚠️ 溢價率 (泡沫)" if is_bubble else "✅ 折價率 (低估)", 
                         f"{latest['Deviation_Pct']:.1f}%", 
-                        f"{latest['Deviation']:.0f} 點",
+                        f"{latest['Deviation']:.0f} pts",
                         delta_color="inverse"
                     )
+                
+                with d_col4:
+                    # 顏色邏輯：R²高(綠=可信) / R²低(紅=不可信)
+                    r2_color = "normal"
+                    if r_squared > 0.7: r2_color = "off" # 綠色/灰色 (Streamlit normal is good)
+                    elif r_squared < 0.3: r2_color = "inverse" # 紅色 (Warning)
+                    
+                    st.metric(
+                        "📊 模型可信度 (R²)", 
+                        f"{r_squared:.2f}",
+                        "越接近 1 越準確",
+                        delta_color=r2_color
+                    )
+
+                # 如果 R² 太低，顯示警告
+                if r_squared < 0.3:
+                    st.warning(f"🚨 **注意：** 此資產與流動性的相關性極低 (R²={r_squared:.2f})。這代表它的漲跌主要**不是**由資金面驅動的（可能是基本面或避險情緒）。模型算出的「溢價」參考價值不高。")
+
 
                 # 繪圖 1: 走勢對比
                 fig, ax1 = plt.subplots(figsize=(10, 6))
