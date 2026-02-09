@@ -40,24 +40,36 @@ def get_macro_data(api_key, days):
     start_date = datetime.now() - timedelta(days=days)
     
     try:
+        # 1. 既有數據
         fed_assets = fred.get_series('WALCL', observation_start=start_date)
         tga = fred.get_series('WTREGEN', observation_start=start_date)
         rrp = fred.get_series('RRPONTSYD', observation_start=start_date)
         yc_10y3m = fred.get_series('T10Y3M', observation_start=start_date)
         ccc = fred.get_series('BAMLH0A3HYC', observation_start=start_date)
         bb = fred.get_series('BAMLH0A1HYBB', observation_start=start_date)
+        
+        # 2. 新增數據：RRP套利利差 (3個月國債 - RRP利率)
+        t3m = fred.get_series('DGS3MO', observation_start=start_date)
+        rrp_rate = fred.get_series('RRPONTSYAWARD', observation_start=start_date)
 
         df = pd.DataFrame({
             'Fed_Assets': fed_assets, 'TGA': tga, 'RRP': rrp,
-            'Yield_Curve': yc_10y3m, 'CCC': ccc, 'BB': bb
+            'Yield_Curve': yc_10y3m, 'CCC': ccc, 'BB': bb,
+            'T3M': t3m, 'RRP_Rate': rrp_rate
         })
+        
         df = df.fillna(method='ffill').dropna()
         
+        # 計算衍生指標
         df['Net_Liquidity'] = (df['Fed_Assets'] - df['TGA'] - df['RRP']) / 1000000 
         df['Credit_Stress'] = df['CCC'] - df['BB']
         
+        # 新增計算：套利利差 (正值代表資金會從 RRP 流出買國債)
+        df['Arb_Spread'] = df['T3M'] - df['RRP_Rate']
+        
         return df
     except Exception as e:
+        st.error(f"數據抓取錯誤: {e}")
         return None
 
 def get_stock_data(ticker, start_date):
@@ -182,39 +194,108 @@ if api_key_input:
                 st.warning("數據不足，無法計算模型。")
 
         with tab2:
-            st.subheader("10年期 - 3個月公債利差 (Interactive)")
-            fig_yc = go.Figure()
+            st.subheader("雙重利差監控：經濟衰退 vs. 資金套利")
             
-            # 修正：將顏色從 'black' 改為 '#00FFFF' (青色) 或其他亮色，以便在深色背景顯示
+            # 建立雙軸圖表 (雖然單位都是%，但雙軸可以避免互相干擾視覺)
+            fig_yc = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # 1. 主線：10年期 - 3個月 (經濟衰退指標) - 青色
             fig_yc.add_trace(go.Scatter(
                 x=df.index, 
                 y=df['Yield_Curve'], 
-                name="10Y-3M Spread", 
-                line=dict(color='#00FFFF', width=2) # 改成青色 Cyan
-            ))
+                name="10Y-3M (Recession Indicator)", 
+                line=dict(color='#00FFFF', width=2)
+            ), secondary_y=False)
             
-            # 填色 (衰退訊號)
+            # 2. 副線：3個月 - RRP利率 (RRP提款指標) - 粉紅色虛線
+            fig_yc.add_trace(go.Scatter(
+                x=df.index, 
+                y=df['Arb_Spread'], 
+                name="3M T-Bill - RRP (Liquidity Drain)", 
+                line=dict(color='#FF00FF', width=2, dash='dot')
+            ), secondary_y=True) # 放在右軸，或者為了比較也可以放左軸(secondary_y=False)，看你喜好
+            
+            # 3. 裝飾：衰退訊號區 (10Y-3M < 0)
             fig_yc.add_hrect(
-                y0=0, 
-                y1=min(df['Yield_Curve'].min(), -1), 
-                fillcolor="red", 
-                opacity=0.2, 
-                line_width=0, 
-                annotation_text="Recession Signal (Inverted)", 
-                annotation_position="bottom right"
+                y0=0, y1=min(df['Yield_Curve'].min(), -1), 
+                fillcolor="red", opacity=0.1, line_width=0, 
+                annotation_text="Recession Zone", secondary_y=False
             )
             
-            # 零軸線
-            fig_yc.add_hline(y=0, line_dash="dash", line_color="gray")
-            
+            # 4. 裝飾：套利逆轉區 (3M < RRP)
+            # 當這條粉紅線跌破 0，代表 RRP 開始吸血 (危機信號)
+            fig_yc.add_hline(y=0, line_dash="solid", line_color="gray", opacity=0.5)
+
             fig_yc.update_layout(
                 height=600,
                 hovermode="x unified",
-                yaxis_title="Spread (Points)",
-                xaxis_title="Date"
+                legend=dict(orientation="h", y=1.1),
+                title_text="Cyan: Economic Cycle | Magenta: Plumbing Pressure"
             )
             
+            # 設定座標軸標題
+            fig_yc.update_yaxes(title_text="10Y-3M Spread (%)", secondary_y=False)
+            fig_yc.update_yaxes(title_text="3M-RRP Spread (%)", secondary_y=True, showgrid=False)
+            
             st.plotly_chart(fig_yc, use_container_width=True)
+            
+            st.info("""
+            **解讀指南 (Physics of Spreads):**
+            * 🔵 **青線 (10Y-3M):** 跌入紅色區域 = **經濟衰退倒數**。
+            * 🟣 **粉紅線 (3M-RRP):** * **正值 (+):** 資金從 RRP 流出買國債 (流動性釋放/中性)。
+                * **負值 (-):** 資金逃回 RRP 避險 (流動性猝死/銀行危機)。**如果這條線急墜破 0，快跑！**
+            """)with tab2:
+            st.subheader("雙重利差監控：經濟衰退 vs. 資金套利")
+            
+            # 建立雙軸圖表 (雖然單位都是%，但雙軸可以避免互相干擾視覺)
+            fig_yc = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # 1. 主線：10年期 - 3個月 (經濟衰退指標) - 青色
+            fig_yc.add_trace(go.Scatter(
+                x=df.index, 
+                y=df['Yield_Curve'], 
+                name="10Y-3M (Recession Indicator)", 
+                line=dict(color='#00FFFF', width=2)
+            ), secondary_y=False)
+            
+            # 2. 副線：3個月 - RRP利率 (RRP提款指標) - 粉紅色虛線
+            fig_yc.add_trace(go.Scatter(
+                x=df.index, 
+                y=df['Arb_Spread'], 
+                name="3M T-Bill - RRP (Liquidity Drain)", 
+                line=dict(color='#FF00FF', width=2, dash='dot')
+            ), secondary_y=True) # 放在右軸，或者為了比較也可以放左軸(secondary_y=False)，看你喜好
+            
+            # 3. 裝飾：衰退訊號區 (10Y-3M < 0)
+            fig_yc.add_hrect(
+                y0=0, y1=min(df['Yield_Curve'].min(), -1), 
+                fillcolor="red", opacity=0.1, line_width=0, 
+                annotation_text="Recession Zone", secondary_y=False
+            )
+            
+            # 4. 裝飾：套利逆轉區 (3M < RRP)
+            # 當這條粉紅線跌破 0，代表 RRP 開始吸血 (危機信號)
+            fig_yc.add_hline(y=0, line_dash="solid", line_color="gray", opacity=0.5)
+
+            fig_yc.update_layout(
+                height=600,
+                hovermode="x unified",
+                legend=dict(orientation="h", y=1.1),
+                title_text="Cyan: Economic Cycle | Magenta: Plumbing Pressure"
+            )
+            
+            # 設定座標軸標題
+            fig_yc.update_yaxes(title_text="10Y-3M Spread (%)", secondary_y=False)
+            fig_yc.update_yaxes(title_text="3M-RRP Spread (%)", secondary_y=True, showgrid=False)
+            
+            st.plotly_chart(fig_yc, use_container_width=True)
+            
+            st.info("""
+            **解讀指南 (Physics of Spreads):**
+            * 🔵 **青線 (10Y-3M):** 跌入紅色區域 = **經濟衰退倒數**。
+            * 🟣 **粉紅線 (3M-RRP):** * **正值 (+):** 資金從 RRP 流出買國債 (流動性釋放/中性)。
+                * **負值 (-):** 資金逃回 RRP 避險 (流動性猝死/銀行危機)。**如果這條線急墜破 0，快跑！**
+            """)
 
         with tab3:
             st.subheader("垃圾債壓力指標 (CCC - BB)")
