@@ -194,56 +194,57 @@ if api_key_input:
                 st.warning("數據不足，無法計算模型。")
 
         with tab2:
-            st.subheader("雙重利差監控：經濟衰退 vs. 資金套利")
+            st.subheader("雙重利差監控：同一參考系比較 (Shared Y-Axis)")
             
-            # 建立雙軸圖表 (雖然單位都是%，但雙軸可以避免互相干擾視覺)
-            fig_yc = make_subplots(specs=[[{"secondary_y": True}]])
+            # 改回單一圖表物件，共用左側 Y 軸
+            fig_yc = go.Figure()
             
             # 1. 主線：10年期 - 3個月 (經濟衰退指標) - 青色
             fig_yc.add_trace(go.Scatter(
                 x=df.index, 
                 y=df['Yield_Curve'], 
-                name="10Y-3M (Recession Indicator)", 
+                name="10Y-3M (Macro Cycle)", 
                 line=dict(color='#00FFFF', width=2)
-            ), secondary_y=False)
+            ))
             
             # 2. 副線：3個月 - RRP利率 (RRP提款指標) - 粉紅色虛線
             fig_yc.add_trace(go.Scatter(
                 x=df.index, 
                 y=df['Arb_Spread'], 
-                name="3M T-Bill - RRP (Liquidity Drain)", 
+                name="3M T-Bill - RRP (Liquidity Plumbing)", 
                 line=dict(color='#FF00FF', width=2, dash='dot')
-            ), secondary_y=True) # 放在右軸，或者為了比較也可以放左軸(secondary_y=False)，看你喜好
+            ))
             
             # 3. 裝飾：衰退訊號區 (10Y-3M < 0)
+            # 因為共用軸，我們可以讓紅色區域只覆蓋負值部分，視覺上更直觀
             fig_yc.add_hrect(
-                y0=0, y1=min(df['Yield_Curve'].min(), -1), 
-                fillcolor="red", opacity=0.1, line_width=0, 
-                annotation_text="Recession Zone", secondary_y=False
+                y0=0, 
+                y1=min(df['Yield_Curve'].min(), -1.0), # 動態調整底部
+                fillcolor="red", 
+                opacity=0.15, 
+                line_width=0, 
+                annotation_text="Recession Zone (Inverted)", 
+                annotation_position="bottom right"
             )
             
-            # 4. 裝飾：套利逆轉區 (3M < RRP)
-            # 當這條粉紅線跌破 0，代表 RRP 開始吸血 (危機信號)
-            fig_yc.add_hline(y=0, line_dash="solid", line_color="gray", opacity=0.5)
+            # 4. 關鍵界線：零軸
+            fig_yc.add_hline(y=0, line_dash="solid", line_color="gray", opacity=0.8)
 
             fig_yc.update_layout(
                 height=600,
                 hovermode="x unified",
-                legend=dict(orientation="h", y=1.1),
-                title_text="Cyan: Economic Cycle | Magenta: Plumbing Pressure"
+                legend=dict(orientation="h", y=1.05),
+                title_text="Spread Comparison (%)",
+                yaxis_title="Spread Strength (Percentage Points)",
+                xaxis_title="Date"
             )
-            
-            # 設定座標軸標題
-            fig_yc.update_yaxes(title_text="10Y-3M Spread (%)", secondary_y=False)
-            fig_yc.update_yaxes(title_text="3M-RRP Spread (%)", secondary_y=True, showgrid=False)
             
             st.plotly_chart(fig_yc, use_container_width=True)
             
             st.info("""
-            **解讀指南 (Physics of Spreads):**
-            * 🔵 **青線 (10Y-3M):** 跌入紅色區域 = **經濟衰退倒數**。
-            * 🟣 **粉紅線 (3M-RRP):** * **正值 (+):** 資金從 RRP 流出買國債 (流動性釋放/中性)。
-                * **負值 (-):** 資金逃回 RRP 避險 (流動性猝死/銀行危機)。**如果這條線急墜破 0，快跑！**
+            **物理學解讀 (同軸比較):**
+            * **振幅差異:** 你會發現 **青線 (宏觀)** 的波動幅度遠大於 **粉紅線 (微觀)**。這是正常的，因為 RRP 套利是極短期的無風險操作，利差通常被壓縮在 0.05% - 0.2% 之間。
+            * **危險訊號:** 如果有一天，你看到 **粉紅線 (微觀)** 的波動幅度突然放大，甚至追上了青線的高度，那代表**市場機制失效 (Broken Mechanism)**，那是比經濟衰退更可怕的流動性崩潰。
             """)
 
         with tab3:
