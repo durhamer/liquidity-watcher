@@ -184,11 +184,36 @@ if api_key_input:
         with tab2:
             st.subheader("10年期 - 3個月公債利差 (Interactive)")
             fig_yc = go.Figure()
-            fig_yc.add_trace(go.Scatter(x=df.index, y=df['Yield_Curve'], name="10Y-3M Spread", line=dict(color='black')))
-            # 填色
-            fig_yc.add_hrect(y0=0, y1=min(df['Yield_Curve'].min(), -1), fillcolor="red", opacity=0.1, line_width=0, annotation_text="Recession Signal")
+            
+            # 修正：將顏色從 'black' 改為 '#00FFFF' (青色) 或其他亮色，以便在深色背景顯示
+            fig_yc.add_trace(go.Scatter(
+                x=df.index, 
+                y=df['Yield_Curve'], 
+                name="10Y-3M Spread", 
+                line=dict(color='#00FFFF', width=2) # 改成青色 Cyan
+            ))
+            
+            # 填色 (衰退訊號)
+            fig_yc.add_hrect(
+                y0=0, 
+                y1=min(df['Yield_Curve'].min(), -1), 
+                fillcolor="red", 
+                opacity=0.2, 
+                line_width=0, 
+                annotation_text="Recession Signal (Inverted)", 
+                annotation_position="bottom right"
+            )
+            
+            # 零軸線
             fig_yc.add_hline(y=0, line_dash="dash", line_color="gray")
-            fig_yc.update_layout(hovermode="x unified")
+            
+            fig_yc.update_layout(
+                height=600,
+                hovermode="x unified",
+                yaxis_title="Spread (Points)",
+                xaxis_title="Date"
+            )
+            
             st.plotly_chart(fig_yc, use_container_width=True)
 
         with tab3:
