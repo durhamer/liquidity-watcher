@@ -40,7 +40,13 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("[申請 FRED API Key](https://fred.stlouisfed.org/docs/api/api_key.html)")
 
-# --- 3. 數據核心 ---
+# --- 修正 1. 側邊欄設定區 (Side Bar) ---
+# 把原本的 data_fetch_days 計算改成這樣：
+# 為了確保能涵蓋到 2000 年 (甚至更早)，我們直接抓 30 年的數據
+data_fetch_days = 365 * 30 
+
+
+# --- 修正 2. 數據抓取核心函數 (Function) ---
 @st.cache_data(ttl=3600)
 def get_macro_data(api_key, days):
     fred = Fred(api_key=api_key)
@@ -50,12 +56,17 @@ def get_macro_data(api_key, days):
         # 1. 流動性數據
         fed_assets = fred.get_series('WALCL', observation_start=start_date)
         tga = fred.get_series('WTREGEN', observation_start=start_date)
-        rrp = fred.get_series('RRPONTSYD', observation_start=start_date)
+        
+        # [修正重點] RRP 在 2013 以前不存在，抓下來會是 NaN。
+        # 我們用 fillna(0) 把空值填為 0，這樣就不會導致前面的數據被 dropna 殺掉。
+        rrp = fred.get_series('RRPONTSYD', observation_start=start_date).fillna(0)
         
         # 2. 利率與利差
         yc_10y3m = fred.get_series('T10Y3M', observation_start=start_date)
         t3m = fred.get_series('DGS3MO', observation_start=start_date)
-        rrp_rate = fred.get_series('RRPONTSYAWARD', observation_start=start_date)
+        
+        # [修正重點] RRP 利率以前也是 0
+        rrp_rate = fred.get_series('RRPONTSYAWARD', observation_start=start_date).fillna(0)
 
         # 3. 信貸週期數據
         bank_credit = fred.get_series('TOTBKCR', observation_start=start_date)
@@ -73,7 +84,15 @@ def get_macro_data(api_key, days):
             'HY_Spread': hy_spread
         })
         
-        df = df.fillna(method='ffill').dropna()
+        # 先做 forward fill 補齊週末或國定假日的空缺
+        df = df.fillna(method='ffill')
+        
+        # [修正重點] 再次確保 RRP 系列是 0 而不是 NaN (雙重保險)
+        df['RRP'] = df['RRP'].fillna(0)
+        df['RRP_Rate'] = df['RRP_Rate'].fillna(0)
+        
+        # 最後才 dropna，這時候只會刪除那些「真的完全沒數據」的早期日子 (例如 80 年代)
+        df = df.dropna()
         
         # 計算衍生指標
         df['Net_Liquidity'] = (df['Fed_Assets'] - df['TGA'] - df['RRP']) / 1000000 
