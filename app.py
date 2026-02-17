@@ -5,6 +5,7 @@ import yfinance as yf
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 from scipy.stats import norm
 
@@ -27,26 +28,18 @@ with st.sidebar:
     )
     
     st.subheader("🗓️ 時間軸設定")
-    # [新增] 圖表顯示起始年
-    display_start_year = st.slider("圖表顯示起始年", 2000, 2026, 2020)
+    display_start_year = st.slider("圖表顯示起始年", 2000, 2026, 2018)
     
     st.subheader("🧮 模型訓練區間")
     reg_start_year = st.slider("回歸模型訓練起始年", 2010, 2025, 2020)
     
-    # 計算需要的數據回溯天數 (為了模型訓練，可能需要比顯示更早的數據)
-    # 這裡預設抓取足夠長的數據，顯示時再過濾
-    data_fetch_days = 365 * 20 # 抓 20 年數據確保足夠
+    # 抓取足夠長的數據 (30年) 以涵蓋 2000 年
+    data_fetch_days = 365 * 30 
 
     st.markdown("---")
     st.markdown("[申請 FRED API Key](https://fred.stlouisfed.org/docs/api/api_key.html)")
 
-# --- 修正 1. 側邊欄設定區 (Side Bar) ---
-# 把原本的 data_fetch_days 計算改成這樣：
-# 為了確保能涵蓋到 2000 年 (甚至更早)，我們直接抓 30 年的數據
-data_fetch_days = 365 * 30 
-
-
-# --- 修正 2. 數據抓取核心函數 (Function) ---
+# --- 3. 數據核心 ---
 @st.cache_data(ttl=3600)
 def get_macro_data(api_key, days):
     fred = Fred(api_key=api_key)
@@ -56,16 +49,12 @@ def get_macro_data(api_key, days):
         # 1. 流動性數據
         fed_assets = fred.get_series('WALCL', observation_start=start_date)
         tga = fred.get_series('WTREGEN', observation_start=start_date)
-        
-        # [修正重點] RRP 在 2013 以前不存在，抓下來會是 NaN。
-        # 我們用 fillna(0) 把空值填為 0，這樣就不會導致前面的數據被 dropna 殺掉。
+        # RRP 在 2013 以前不存在，填 0
         rrp = fred.get_series('RRPONTSYD', observation_start=start_date).fillna(0)
         
         # 2. 利率與利差
         yc_10y3m = fred.get_series('T10Y3M', observation_start=start_date)
         t3m = fred.get_series('DGS3MO', observation_start=start_date)
-        
-        # [修正重點] RRP 利率以前也是 0
         rrp_rate = fred.get_series('RRPONTSYAWARD', observation_start=start_date).fillna(0)
 
         # 3. 信貸週期數據
@@ -84,14 +73,10 @@ def get_macro_data(api_key, days):
             'HY_Spread': hy_spread
         })
         
-        # 先做 forward fill 補齊週末或國定假日的空缺
+        # 數據清洗
         df = df.fillna(method='ffill')
-        
-        # [修正重點] 再次確保 RRP 系列是 0 而不是 NaN (雙重保險)
         df['RRP'] = df['RRP'].fillna(0)
         df['RRP_Rate'] = df['RRP_Rate'].fillna(0)
-        
-        # 最後才 dropna，這時候只會刪除那些「真的完全沒數據」的早期日子 (例如 80 年代)
         df = df.dropna()
         
         # 計算衍生指標
@@ -141,19 +126,31 @@ if api_key_input:
         merged_df = pd.concat([df, stock_series], axis=1).dropna()
         merged_df.columns = list(df.columns) + ['Stock_Price']
 
-        # [關鍵] 根據使用者選擇的年份過濾顯示數據
+        # 過濾顯示數據
         display_start_date = f"{display_start_year}-01-01"
         display_df = merged_df[merged_df.index >= display_start_date]
 
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "💧 流動性估值", "📉 殖利率曲線", "☢️ VPIN 毒性偵測", "🏦 雙戰場違約監控"
+        # --- [新功能] 數據下載中心 ---
+        with st.sidebar:
+            st.divider()
+            st.subheader("💾 數據匯出")
+            csv = display_df.to_csv().encode('utf-8')
+            st.download_button(
+                label="📥 下載當前圖表數據 (CSV)",
+                data=csv,
+                file_name=f'macro_data_{display_start_year}_present.csv',
+                mime='text/csv',
+            )
+            st.info("下載後可用 Excel 開啟，驗證數據相關性。")
+
+        # Tabs
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "💧 流動性估值", "📉 殖利率曲線", "☢️ VPIN 毒性偵測", "🏦 雙戰場違約監控", "🧮 數學相關性矩陣"
         ])
 
         # Tab 1: 流動性
         with tab1:
             st.subheader(f"美元淨流動性 vs {compare_index.split(' ')[0]}")
-            
-            # 模型訓練區間 (可以跟顯示區間不同)
             train_start = f"{reg_start_year}-01-01"
             train_data = merged_df[merged_df.index >= train_start]
             
@@ -161,11 +158,9 @@ if api_key_input:
                 x = train_data['Net_Liquidity']; y = train_data['Stock_Price']
                 slope, intercept = np.polyfit(x, y, 1)
                 
-                # 計算全區間的 Fair Value
                 merged_df['Fair_Value'] = merged_df['Net_Liquidity'] * slope + intercept
                 merged_df['Deviation_Pct'] = ((merged_df['Stock_Price'] - merged_df['Fair_Value']) / merged_df['Fair_Value']) * 100
                 
-                # 再切分顯示用的 DF
                 plot_df = merged_df[merged_df.index >= display_start_date]
                 latest = plot_df.iloc[-1]
                 
@@ -208,43 +203,31 @@ if api_key_input:
                             fig_vpin.add_hline(y=0.8, line_color="red"); fig_vpin.update_layout(height=500); st.plotly_chart(fig_vpin, use_container_width=True)
                     except: st.error("數據下載失敗")
 
-        # Tab 4: 雙戰場違約監控 (已更新)
+        # Tab 4: 雙戰場違約監控
         with tab4:
             st.subheader("🏦 雙戰場違約監控 vs 股價")
-            st.markdown("""
-            此圖表展示了著名的 **「鱷魚口 (Alligator Jaws)」** 現象：
-            * **左軸 (風險指標):** 消費者違約率 (紅)、企業違約率 (黃)、高收益債利差 (紫)。這些越高越危險。
-            * **右軸 (資產價格):** **S&P 500 股價 (綠虛線)**。
-            * **戰術訊號:** 當 **紅/黃/紫線往上飆**，但 **綠線 (股價) 還在往上** 時，就是最危險的背離。鱷魚嘴巴張得越大，閉合時咬得越用力。
-            """)
-            
-            # 使用 display_df (根據年份過濾後的數據)
             fig_battle = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # 1. 企業恐慌 (背景) - 左軸
             fig_battle.add_trace(go.Scatter(
                 x=display_df.index, y=display_df['HY_Spread'], 
                 name="高收益債恐慌利差 (HY Spread)", 
                 fill='tozeroy', 
                 line=dict(color='rgba(148, 0, 211, 0.2)', width=0),
                 marker=dict(color='rgba(148, 0, 211, 0.2)')
-            ), secondary_y=False) # 改為左軸，統一風險指標
+            ), secondary_y=False)
 
-            # 2. 消費者違約 (紅線) - 左軸
             fig_battle.add_trace(go.Scatter(
                 x=display_df.index, y=display_df['Delinq_Consumer'], 
                 name="消費者違約率 (Credit Card)", 
                 line=dict(color='#FF4500', width=3)
             ), secondary_y=False)
             
-            # 3. 企業違約 (黃線) - 左軸
             fig_battle.add_trace(go.Scatter(
                 x=display_df.index, y=display_df['Delinq_Corp'], 
                 name="企業違約率 (C&I Loans)", 
                 line=dict(color='#FFD700', width=3, dash='solid')
             ), secondary_y=False)
 
-            # 4. [新增] 股價 (綠虛線) - 右軸
             fig_battle.add_trace(go.Scatter(
                 x=display_df.index, y=display_df['Stock_Price'],
                 name=f"{compare_index.split(' ')[0]} Price",
@@ -257,21 +240,41 @@ if api_key_input:
                 hovermode="x unified",
                 legend=dict(orientation="h", y=1.1)
             )
-            
-            # 設定座標軸標題
             fig_battle.update_yaxes(title_text="Delinquency / Spread (%)", secondary_y=False)
-            fig_battle.update_yaxes(title_text="Stock Price Index", secondary_y=True, showgrid=False) # 右軸不顯示網格，避免混亂
-            
+            fig_battle.update_yaxes(title_text="Stock Price Index", secondary_y=True, showgrid=False)
             st.plotly_chart(fig_battle, use_container_width=True)
+
+        # --- [新功能] Tab 5: 數學相關性分析 ---
+        with tab5:
+            st.subheader("🧮 數學真相：相關性矩陣 (Correlation Matrix)")
+            st.markdown(f"""
+            這裡直接用數據回答你的問題：**「這些風險指標與 {compare_index} 到底有沒有數學相關？」**
+            * **數值越接近 1.0 (紅):** 正相關 (同步漲跌)。
+            * **數值越接近 -1.0 (藍):** 負相關 (蹺蹺板效應)。
+            * **數值接近 0:** 沒關係 (Random)。
+            """)
             
-            latest_cons = display_df['Delinq_Consumer'].iloc[-1]
-            latest_spread = display_df['HY_Spread'].iloc[-1]
-            latest_price = display_df['Stock_Price'].iloc[-1]
+            # 準備相關性分析的數據集
+            # 我們只選取關鍵指標
+            corr_cols = ['Stock_Price', 'Net_Liquidity', 'Delinq_Consumer', 'Delinq_Corp', 'HY_Spread', 'Yield_Curve']
+            corr_df = display_df[corr_cols].corr()
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("🔴 消費者違約率", f"{latest_cons:.2f}%", delta_color="inverse")
-            c2.metric("🟣 企業恐慌利差", f"{latest_spread:.2f}%", delta_color="inverse")
-            c3.metric("🟢 股價指數", f"{latest_price:,.0f}")
+            # 繪製熱力圖
+            fig_corr = px.imshow(
+                corr_cols_labels := corr_df,
+                text_auto='.2f',
+                aspect="auto",
+                color_continuous_scale='RdBu_r', # 紅藍配色 (紅正藍負)
+                title=f"Correlation Matrix ({display_start_year}-Present)"
+            )
+            st.plotly_chart(fig_corr, use_container_width=True)
+            
+            st.info("""
+            **💡 狙擊手解讀技巧：**
+            1. 檢查 **Stock_Price** 與 **Net_Liquidity** 的關係。如果是高度正相關 (紅)，代表這段時間是「資金行情」。
+            2. 檢查 **Stock_Price** 與 **HY_Spread**。理論上應該是強烈負相關 (藍)，代表恐慌越低，股價越高。如果變成正相關，代表市場失靈。
+            3. 檢查 **Delinq_Consumer** 與 **Delinq_Corp**。看這兩個違約率是否同步。
+            """)
 
 else:
     st.info("👈 請在左側輸入 FRED API Key 以啟動交互式戰情室")
