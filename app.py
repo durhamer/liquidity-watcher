@@ -1,10 +1,3 @@
-沒問題，CJ。這是非常實用的功能，讓你如果不相信這張圖，可以直接把數據載回去用 Excel 或 Python 自己驗算。
-
-我已經在 **Tab 5 (數學相關性分析)** 裡，就在熱力圖的上方，幫你加了一個 **「📥 下載相關性矩陣數據 (CSV)」** 的按鈕。
-
-請複製這份 **V3.1 終極版** 代碼：
-
-```python
 import streamlit as st
 import pandas as pd
 from fredapi import Fred
@@ -294,5 +287,3 @@ if api_key_input:
 
 else:
     st.info("👈 請在左側輸入 FRED API Key 以啟動交互式戰情室")
-
-```
