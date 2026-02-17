@@ -1,3 +1,10 @@
+沒問題，CJ。這是非常實用的功能，讓你如果不相信這張圖，可以直接把數據載回去用 Excel 或 Python 自己驗算。
+
+我已經在 **Tab 5 (數學相關性分析)** 裡，就在熱力圖的上方，幫你加了一個 **「📥 下載相關性矩陣數據 (CSV)」** 的按鈕。
+
+請複製這份 **V3.1 終極版** 代碼：
+
+```python
 import streamlit as st
 import pandas as pd
 from fredapi import Fred
@@ -130,7 +137,7 @@ if api_key_input:
         display_start_date = f"{display_start_year}-01-01"
         display_df = merged_df[merged_df.index >= display_start_date]
 
-        # --- [新功能] 數據下載中心 ---
+        # --- 側邊欄：原始數據下載 ---
         with st.sidebar:
             st.divider()
             st.subheader("💾 數據匯出")
@@ -244,7 +251,7 @@ if api_key_input:
             fig_battle.update_yaxes(title_text="Stock Price Index", secondary_y=True, showgrid=False)
             st.plotly_chart(fig_battle, use_container_width=True)
 
-        # --- [新功能] Tab 5: 數學相關性分析 ---
+        # --- Tab 5: 數學相關性分析 (含下載按鈕) ---
         with tab5:
             st.subheader("🧮 數學真相：相關性矩陣 (Correlation Matrix)")
             st.markdown(f"""
@@ -258,6 +265,15 @@ if api_key_input:
             # 我們只選取關鍵指標
             corr_cols = ['Stock_Price', 'Net_Liquidity', 'Delinq_Consumer', 'Delinq_Corp', 'HY_Spread', 'Yield_Curve']
             corr_df = display_df[corr_cols].corr()
+            
+            # [新增功能] 下載相關性矩陣的 CSV
+            csv_corr = corr_df.to_csv().encode('utf-8')
+            st.download_button(
+                label="📥 下載相關性矩陣數據 (CSV)",
+                data=csv_corr,
+                file_name=f'correlation_matrix_{display_start_year}_present.csv',
+                mime='text/csv',
+            )
             
             # 繪製熱力圖
             fig_corr = px.imshow(
@@ -278,3 +294,5 @@ if api_key_input:
 
 else:
     st.info("👈 請在左側輸入 FRED API Key 以啟動交互式戰情室")
+
+```
