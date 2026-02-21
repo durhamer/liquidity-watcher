@@ -79,8 +79,12 @@ def get_macro_data(api_key, days):
         df['RRP_Rate'] = df['RRP_Rate'].fillna(0)
         df = df.dropna()
         
-        # 計算衍生指標
-        df['Net_Liquidity'] = (df['Fed_Assets'] - df['TGA'] - df['RRP']) / 1000000 
+        # 修正：Fed_Assets 和 TGA 是百萬，RRP 是十億。統一轉為 Trillions (兆)
+        # Fed_Assets / 1,000,000  => Trillions
+        # TGA / 1,000,000         => Trillions
+        # RRP / 1,000             => Trillions (FRED 的 RRPONTSYD 單位是 Billions)
+
+        df['Net_Liquidity'] = (df['Fed_Assets'] / 1000000) - (df['TGA'] / 1000000) - (df['RRP'] / 1000)
         df['Arb_Spread'] = df['T3M'] - df['RRP_Rate']
         
         return df
@@ -92,12 +96,15 @@ def get_stock_data(ticker, start_date):
     if not ticker: return None
     symbol = ticker.split(" ")[0]
     try:
-        stock = yf.download(symbol, start=start_date, progress=False)['Close']
-        if isinstance(stock, pd.DataFrame): 
-             stock = stock.iloc[:, 0]
+        # 修正：加入 auto_adjust 確保拿到單純的 Close
+        df_stock = yf.download(symbol, start=start_date, progress=False)
+        if isinstance(df_stock.columns, pd.MultiIndex):
+            df_stock.columns = df_stock.columns.get_level_values(0)
+        stock = df_stock['Close']
         stock.index = stock.index.tz_localize(None)
         return stock
-    except:
+    except Exception as e:
+        st.error(f"股票數據抓取失敗: {e}")
         return None
 
 # --- VPIN 引擎 ---
@@ -165,7 +172,9 @@ if api_key_input:
                 latest = plot_df.iloc[-1]
                 
                 c1, c2, c3 = st.columns(3)
+                # Tab 1: 顯示部分
                 c1.metric("當前淨流動性", f"${latest['Net_Liquidity']:.2f} T")
+                # Fair_Value 的計算保持不變，因為 slope 會自動適應新的 x 尺度
                 c2.metric("理論公允股價", f"{latest['Fair_Value']:.0f}")
                 c3.metric("溢價率", f"{latest['Deviation_Pct']:.1f}%", delta_color="inverse")
                 
