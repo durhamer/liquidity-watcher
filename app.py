@@ -158,6 +158,24 @@ if api_key_input:
                     
                     merged_df['Fair_Value'] = merged_df['Net_Liquidity'] * slope + intercept
                     merged_df['Deviation_Pct'] = ((merged_df['Stock_Price'] - merged_df['Fair_Value']) / merged_df['Fair_Value']) * 100
+                    # Tab 1: 流動性估值修正版
+            with tab1:
+            # 🟢 優化 1：對 Net_Liquidity 進行 30 天平滑處理，消除 TGA 噪音
+                merged_df['Net_Liquidity_Smooth'] = merged_df['Net_Liquidity'].rolling(window=7).mean()
+            
+                    train_start = f"{reg_start_year}-01-01"
+            # 確保訓練數據與顯示數據分開處理
+                train_data = merged_df[merged_df.index >= train_start].dropna()
+            
+                if len(train_data) > 30:
+                    x = train_data['Net_Liquidity_Smooth']
+                    y = train_data['Stock_Price']
+                    slope, intercept = np.polyfit(x, y, 1)
+                
+                # 計算全量的 Fair Value
+                    merged_df['Fair_Value'] = merged_df['Net_Liquidity_Smooth'] * slope + intercept
+                # 溢價率計算
+                    merged_df['Deviation_Pct'] = ((merged_df['Stock_Price'] - merged_df['Fair_Value']) / merged_df['Fair_Value']) * 100
                     
                     plot_df = merged_df[merged_df.index >= display_start_date]
                     latest = plot_df.iloc[-1]
