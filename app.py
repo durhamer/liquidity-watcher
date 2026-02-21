@@ -145,19 +145,6 @@ if api_key_input:
                 "💧 流動性估值", "📉 殖利率曲線", "☢️ VPIN 偵測", "🏦 違約監控", "🧮 相關性"
             ])
 
-            with tab1:
-                st.subheader(f"美元淨流動性 vs {compare_index.split(' ')[0]}")
-                train_start = f"{reg_start_year}-01-01"
-                train_data = merged_df[merged_df.index >= train_start]
-                
-                if len(train_data) > 30:
-                    # 🟢 線性回歸與解釋力計算
-                    x = train_data['Net_Liquidity']; y = train_data['Stock_Price']
-                    slope, intercept = np.polyfit(x, y, 1)
-                    r_squared = np.corrcoef(x, y)[0,1]**2
-                    
-                    merged_df['Fair_Value'] = merged_df['Net_Liquidity'] * slope + intercept
-                    merged_df['Deviation_Pct'] = ((merged_df['Stock_Price'] - merged_df['Fair_Value']) / merged_df['Fair_Value']) * 100
                     # Tab 1: 流動性估值修正版
             with tab1:
             # 🟢 優化 1：對 Net_Liquidity 進行 30 天平滑處理，消除 TGA 噪音
