@@ -150,7 +150,7 @@ if api_key_input:
             # 🟢 優化 1：對 Net_Liquidity 進行 30 天平滑處理，消除 TGA 噪音
                 merged_df['Net_Liquidity_Smooth'] = merged_df['Net_Liquidity'].rolling(window=7).mean()
             
-                    train_start = f"{reg_start_year}-01-01"
+                train_start = f"{reg_start_year}-01-01"
             # 確保訓練數據與顯示數據分開處理
                 train_data = merged_df[merged_df.index >= train_start].dropna()
             
